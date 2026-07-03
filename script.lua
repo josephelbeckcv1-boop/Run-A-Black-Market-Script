@@ -1,5 +1,5 @@
 -- LocalScript in a ScreenGui
--- Full script with faster tweens (0.12s per dealer, 0.2s return)
+-- Full script with automatic teleport to BuyShop on start
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -203,6 +203,89 @@ local function sellCategory(category)
     return success, result
 end
 
+-- ===========================================================
+--  PLOT DETECTION: Find your plot via owner sign
+-- ===========================================================
+local function getSignText(plot)
+    local ownerSign = plot:FindFirstChild("__OwnerSign")
+    if not ownerSign then return nil end
+    local board = ownerSign:FindFirstChild("Board")
+    if not board then return nil end
+    local surfaceGui = board:FindFirstChild("SurfaceGui")
+    if not surfaceGui then return nil end
+    local textLabel = surfaceGui:FindFirstChildWhichIsA("TextLabel")
+    if not textLabel then return nil end
+    return textLabel.Text
+end
+
+local function findMyPlot()
+    local plotsFolder = workspace:FindFirstChild("Plots")
+    if not plotsFolder then
+        warn("[Collect] Plots folder not found")
+        return nil
+    end
+    local expected = player.Name .. "'s Market"
+    for _, plot in ipairs(plotsFolder:GetChildren()) do
+        local sign = getSignText(plot)
+        if sign and sign == expected then
+            return plot
+        end
+    end
+    return nil
+end
+
+-- ===========================================================
+--  TELEPORT TO BUY SHOP ON START
+-- ===========================================================
+local function teleportToShop()
+    local char = player.Character
+    if not char then
+        player.CharacterAdded:Wait()
+        char = player.Character
+    end
+    local root = char:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+
+    local shopRing = workspace:FindFirstChild("BuyShop") and workspace.BuyShop:FindFirstChild("ShopBuyRing")
+    if not shopRing then
+        warn("[Sell UI] ShopBuyRing not found")
+        return
+    end
+
+    local targetPos
+    if shopRing:IsA("BasePart") then
+        targetPos = shopRing.Position
+    elseif shopRing:IsA("Model") then
+        targetPos = shopRing.PrimaryPart and shopRing.PrimaryPart.Position or shopRing:GetPivot().Position
+    else
+        -- fallback: find a part
+        local function findPart(inst)
+            for _, child in ipairs(inst:GetChildren()) do
+                if child:IsA("BasePart") then return child end
+                if child:IsA("Model") then
+                    local found = findPart(child)
+                    if found then return found end
+                end
+            end
+            return nil
+        end
+        local part = findPart(shopRing)
+        if part then targetPos = part.Position end
+    end
+
+    if not targetPos then
+        warn("[Sell UI] Could not get position of ShopBuyRing")
+        return
+    end
+
+    local tween = TweenService:Create(root, TweenInfo.new(0.5, Enum.EasingStyle.Linear), {CFrame = CFrame.new(targetPos)})
+    tween:Play()
+    tween.Completed:Wait()
+end
+
+-- ===========================================================
+--  COLLECT ALL: dynamically use your own plot's Dealers
+-- ===========================================================
 local function collectAll()
     local character = player.Character
     if not character or not character:IsDescendantOf(workspace) then
@@ -215,11 +298,17 @@ local function collectAll()
         return
     end
 
-    local dealersFolder = workspace:FindFirstChild("Plots")
-        and workspace.Plots:FindFirstChild("Plot3")
-        and workspace.Plots.Plot3:FindFirstChild("Dealers")
+    -- Find the player's own plot
+    local myPlot = findMyPlot()
+    if not myPlot then
+        statusLabel.Text = "Your plot not found"
+        return
+    end
+
+    -- Get Dealers folder inside that plot
+    local dealersFolder = myPlot:FindFirstChild("Dealers")
     if not dealersFolder then
-        statusLabel.Text = "Dealers folder not found"
+        statusLabel.Text = "No Dealers folder in your plot"
         return
     end
 
@@ -235,7 +324,6 @@ local function collectAll()
     autoBuyBtn.Visible = false
     endBtn.Visible = false
 
-    -- Faster tweens: 0.12s per dealer, 0.2s return
     for _, dealer in ipairs(dealers) do
         if stopRequested then break end
         local targetPos = nil
@@ -285,6 +373,9 @@ local function collectAll()
     stopRequested = false
 end
 
+-- ===========================================================
+--  AUTO BUY
+-- ===========================================================
 local function autoBuy()
     local money = player:FindFirstChild("Currency") and player.Currency:FindFirstChild("Money")
     if not money then
@@ -334,6 +425,9 @@ local function autoBuy()
     end
 end
 
+-- ===========================================================
+--  SELL LOOP
+-- ===========================================================
 local function startSelling()
     if isRunning then return end
     isRunning = true
@@ -362,6 +456,9 @@ local function startSelling()
     autoBuyBtn.Visible = true
 end
 
+-- ===========================================================
+--  BUTTON CONNECTIONS
+-- ===========================================================
 sellBtn.MouseButton1Click:Connect(startSelling)
 
 collectBtn.MouseButton1Click:Connect(function()
@@ -396,3 +493,13 @@ end)
 player.CharacterAdded:Connect(function()
     screenGui:Destroy()
 end)
+
+-- ===========================================================
+--  INITIAL TELEPORT TO SHOP
+-- ===========================================================
+coroutine.wrap(function()
+    wait(0.5) -- allow UI to settle
+    statusLabel.Text = "Teleporting to shop..."
+    teleportToShop()
+    statusLabel.Text = "Ready"
+end)()
